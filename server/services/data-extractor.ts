@@ -6,19 +6,29 @@ export class DataExtractor {
     return [...new Set(matches)]; // Remove duplicates
   }
 
-  // Extract phone numbers from text content
+  // Extract phone numbers from text content with enhanced patterns
   static extractPhones(text: string): string[] {
     const phoneRegexes = [
       // International format: +39 123 456 7890
-      /\+\d{1,3}\s?\d{1,4}\s?\d{1,4}\s?\d{1,9}/g,
-      // Standard format: (123) 456-7890
-      /\(\d{3}\)\s?\d{3}-?\d{4}/g,
+      /\+\d{1,3}[\s.-]?\d{1,4}[\s.-]?\d{1,4}[\s.-]?\d{1,9}/g,
+      // US/Canada format: (123) 456-7890
+      /\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/g,
       // Simple format: 123-456-7890 or 123.456.7890
-      /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/g,
+      /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
       // European format: 0123 456 789
-      /\b0\d{1,4}\s?\d{1,4}\s?\d{1,9}\b/g,
-      // Mobile format: +39 3xx xxx xxxx
-      /\+\d{2}\s?3\d{2}\s?\d{3}\s?\d{4}/g,
+      /\b0\d{1,4}[\s.-]?\d{1,4}[\s.-]?\d{1,9}\b/g,
+      // Italian mobile: +39 3xx xxx xxxx
+      /\+39[\s.-]?3\d{2}[\s.-]?\d{3}[\s.-]?\d{4}/g,
+      // Generic mobile: +XX XXX XXX XXXX
+      /\+\d{2}[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{4}/g,
+      // UK format: +44 20 7946 0958
+      /\+44[\s.-]?\d{2,4}[\s.-]?\d{4}[\s.-]?\d{4}/g,
+      // German format: +49 30 12345678
+      /\+49[\s.-]?\d{2,4}[\s.-]?\d{6,8}/g,
+      // French format: +33 1 23 45 67 89
+      /\+33[\s.-]?\d{1}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}/g,
+      // Toll-free numbers
+      /\b1?[-.\s]?800[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
     ];
 
     const phones: string[] = [];
@@ -155,9 +165,68 @@ export class DataExtractor {
     return emailRegex.test(email);
   }
 
-  // Validate phone format
+  // Validate phone format with enhanced checks
   static isValidPhone(phone: string): boolean {
     const cleanPhone = phone.replace(/[\s\-\.()]/g, '');
-    return cleanPhone.length >= 7 && cleanPhone.length <= 15 && /^\+?\d+$/.test(cleanPhone);
+    // Check length and format
+    if (cleanPhone.length < 7 || cleanPhone.length > 15) return false;
+    if (!/^\+?\d+$/.test(cleanPhone)) return false;
+    
+    // Exclude obviously invalid patterns
+    const invalidPatterns = [
+      /^0+$/, // All zeros
+      /^1+$/, // All ones
+      /^(\d)\1+$/, // Repeated digits
+      /^123456/, // Sequential numbers
+    ];
+    
+    return !invalidPatterns.some(pattern => pattern.test(cleanPhone));
+  }
+
+  // Extract business registration numbers (VAT, tax ID, etc.)
+  static extractBusinessIds(text: string): { [key: string]: string } {
+    const ids: { [key: string]: string } = {};
+    
+    // Italian VAT/Partita IVA
+    const vatMatch = text.match(/(?:p\.?\s*iva|partita\s+iva|vat)[:\s]*([0-9]{11})/gi);
+    if (vatMatch) {
+      ids.vatNumber = vatMatch[0].replace(/[^\d]/g, '');
+    }
+    
+    // Business registration number
+    const regMatch = text.match(/(?:reg\.?\s*imp\.?|registro\s+imprese)[:\s]*([0-9A-Z-]+)/gi);
+    if (regMatch) {
+      ids.registrationNumber = regMatch[0];
+    }
+    
+    // Tax code (Codice Fiscale)
+    const taxMatch = text.match(/(?:cod\.?\s*fisc\.?|codice\s+fiscale)[:\s]*([A-Z0-9]{16})/gi);
+    if (taxMatch) {
+      ids.taxCode = taxMatch[0];
+    }
+    
+    return ids;
+  }
+
+  // Extract social media links
+  static extractSocialMedia(text: string): { [key: string]: string } {
+    const social: { [key: string]: string } = {};
+    
+    const platforms = {
+      facebook: /(?:facebook\.com|fb\.com)\/([a-zA-Z0-9.]+)/gi,
+      instagram: /instagram\.com\/([a-zA-Z0-9_.]+)/gi,
+      linkedin: /linkedin\.com\/(?:company|in)\/([a-zA-Z0-9-]+)/gi,
+      twitter: /(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/gi,
+      youtube: /youtube\.com\/(?:channel|user|c)\/([a-zA-Z0-9_-]+)/gi,
+    };
+    
+    Object.entries(platforms).forEach(([platform, regex]) => {
+      const match = text.match(regex);
+      if (match) {
+        social[platform] = match[0];
+      }
+    });
+    
+    return social;
   }
 }

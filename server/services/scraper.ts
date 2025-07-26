@@ -320,10 +320,20 @@ export class TrustpilotScraper {
   private async extractCompaniesFromCategory($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings, jobId: string): Promise<any[]> {
     const companies: any[] = [];
 
-    // Based on the browser inspection, use the exact Trustpilot structure
-    // Look for business unit cards in the main container
-    const businessCards = $('div[class*="styles_businessUnitCard"], div[data-business-unit-json], article[data-testid*="business"]');
-    
+    // Enhanced selectors based on current Trustpilot DOM structure
+    const businessCards = $(
+      'div[class*="styles_businessUnitCard"], ' +
+      'div[data-business-unit-json], ' +
+      'article[data-testid*="business"], ' +
+      'div[class*="businessCard"], ' +
+      'div[class*="business-unit"], ' +
+      'div[class*="company-card"], ' +
+      'article[class*="review-card"], ' +
+      '[data-testid="business-unit"], ' +
+      '.business-listing-item, ' +
+      '.company-item'
+    );
+
     await this.storage.addLog({
       level: "info",
       message: `Found ${businessCards.length} business cards using current DOM structure`,
@@ -333,12 +343,12 @@ export class TrustpilotScraper {
     if (businessCards.length > 0) {
       businessCards.each((index, element) => {
         if (index >= (settings.reviewLimit || 100)) return false;
-        
+
         const $card = $(element);
-        
+
         // Extract business name - look for the company title
         let name = '';
-        
+
         // Try multiple selectors for business name based on DOM inspection
         const nameSelectors = [
           'p[class*="styles_businessUnitTitle"]',
@@ -349,12 +359,12 @@ export class TrustpilotScraper {
           'p:first-child',
           '[data-testid*="title"]'
         ];
-        
+
         for (const selector of nameSelectors) {
           const nameEl = $card.find(selector).first();
           if (nameEl.length > 0) {
             let rawName = nameEl.text().trim();
-            
+
             // Extract just the company name, removing rating, reviews, and location data
             // Pattern: CompanyName + domain + rating + reviews + location
             const nameMatch = rawName.match(/^([^0-9.,]+?)(?:[a-z0-9.-]+\.[a-z]{2,}|[\d.,]+|Via |Strada |,)/i);
@@ -363,16 +373,16 @@ export class TrustpilotScraper {
             } else {
               name = rawName.split(/[\d.,]/)[0].trim(); // Take everything before first number
             }
-            
+
             // Clean up common prefixes and formatting issues
             name = name.replace(/^Più rilevante\s*/i, '');
             name = name.replace(/^RILEVANTE\s*/i, '');
             name = name.replace(/\s+/g, ' ');
-            
+
             if (name && name.length > 2) break;
           }
         }
-        
+
         // If still no name, try getting it from the link
         if (!name || name.length < 3) {
           const link = $card.find('a[href*="/review/"]').first();
@@ -385,20 +395,20 @@ export class TrustpilotScraper {
                 name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
               }
             }
-            
+
             // Clean up extracted name from link text too
             name = name.replace(/^Più rilevante\s*/i, '');
             name = name.replace(/^RILEVANTE\s*/i, '');
             name = name.replace(/\s+/g, ' ');
           }
         }
-        
+
         // Skip if no valid name found
         if (!name || name.length < 3) return;
-        
+
         // Extract rating from the concatenated text or rating elements
         let rating: number | null = null;
-        
+
         // First try to find rating in structured elements
         const ratingSelectors = [
           'section[class*="styles_reviewStars"]',
@@ -407,7 +417,7 @@ export class TrustpilotScraper {
           '[data-rating]',
           'img[alt*="star"]'
         ];
-        
+
         for (const selector of ratingSelectors) {
           const ratingEl = $card.find(selector).first();
           if (ratingEl.length > 0) {
@@ -419,7 +429,7 @@ export class TrustpilotScraper {
                 break;
               }
             }
-            
+
             const ratingText = ratingEl.text().trim();
             const ratingMatch = ratingText.match(/(\d+(?:[.,]\d+)?)/);
             if (ratingMatch) {
@@ -431,7 +441,7 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // If no structured rating found, extract from concatenated text
         if (!rating) {
           const fullText = $card.text();
@@ -443,10 +453,10 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // Extract review count from concatenated text or structured elements
         let reviewCount: number | null = null;
-        
+
         // First try structured elements
         const reviewSelectors = [
           'p[class*="styles_reviewCount"]',
@@ -456,7 +466,7 @@ export class TrustpilotScraper {
           'p:contains("recensioni")',
           'div:contains("recensioni")'
         ];
-        
+
         for (const selector of reviewSelectors) {
           const reviewEl = $card.find(selector).first();
           if (reviewEl.length > 0) {
@@ -472,7 +482,7 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // If no structured review count found, extract from concatenated text
         if (!reviewCount) {
           const fullText = $card.text();
@@ -485,11 +495,11 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // Extract location/address from concatenated text or structured elements
         let city: string | null = null;
         let address: string | null = null;
-        
+
         // First try structured elements
         const locationSelectors = [
           'p[class*="styles_location"]',
@@ -498,7 +508,7 @@ export class TrustpilotScraper {
           'p:contains("Via ")',
           'p:contains("Strada ")'
         ];
-        
+
         for (const selector of locationSelectors) {
           const locationEl = $card.find(selector).first();
           if (locationEl.length > 0) {
@@ -518,7 +528,7 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // If no structured location found, extract from concatenated text
         if (!address) {
           const fullText = $card.text();
@@ -536,11 +546,11 @@ export class TrustpilotScraper {
             }
           }
         }
-        
+
         // Get Trustpilot URL and extract domain
         let trustpilotUrl = url;
         let domain = '';
-        
+
         const linkEl = $card.find('a[href*="/review/"]').first();
         if (linkEl.length > 0) {
           const href = linkEl.attr('href');
@@ -548,7 +558,7 @@ export class TrustpilotScraper {
             trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
           }
         }
-        
+
         // Extract domain from concatenated text (usually appears after company name)
         const fullText = $card.text();
         const domainMatch = fullText.match(/([a-z0-9.-]+\.[a-z]{2,})/i);
@@ -557,7 +567,7 @@ export class TrustpilotScraper {
         } else {
           domain = this.extractDomainFromUrl(trustpilotUrl);
         }
-        
+
         // Final name cleanup and validation
         name = name.trim();
         if (name && name.length >= 3 && !name.toLowerCase().includes('unknown')) {
@@ -590,24 +600,24 @@ export class TrustpilotScraper {
       const businessLinks = $('a[href*="/review/"]');
       businessLinks.each((index, element) => {
         if (index >= (settings.reviewLimit || 100)) return false;
-        
+
         const $link = $(element);
         const href = $link.attr('href');
-        
+
         if (!href) return;
-        
+
         let name = $link.text().trim();
         if (!name || name.length < 3) {
           const urlParts = href.split('/review/')[1]?.split('/')[0];
           name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
         }
-        
+
         // Clean up name before adding
         name = name.replace(/^Più rilevante\s*/i, '').replace(/^RILEVANTE\s*/i, '').trim();
-        
+
         if (name && name.length >= 3 && !name.toLowerCase().includes('unknown')) {
           const trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
-          
+
           companies.push({
             name: name,
             rating: null,
@@ -636,7 +646,7 @@ export class TrustpilotScraper {
     const uniqueCompanies = companies.filter((company, index, self) => 
       index === self.findIndex(c => c.name.toLowerCase() === company.name.toLowerCase())
     );
-    
+
     return uniqueCompanies.slice(0, (settings.reviewLimit || 100));
   }
 
@@ -680,7 +690,7 @@ export class TrustpilotScraper {
     } catch (error) {
       // Return null if parsing fails
     }
-    
+
     return null;
   }
 
@@ -954,7 +964,7 @@ export class TrustpilotScraper {
       });
 
       const $ = cheerio.load(htmlContent);
-      
+
       // Enhanced data extraction from business page
       const detailSelectors = {
         website: [
