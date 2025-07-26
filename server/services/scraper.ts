@@ -285,25 +285,18 @@ export class TrustpilotScraper {
         jobId,
       });
 
+      // Debug: Log a sample of the HTML to understand the structure
+      const htmlSample = htmlContent.substring(0, 2000).replace(/\s+/g, ' ');
+      await this.storage.addLog({
+        level: "info",
+        message: `HTML sample: ${htmlSample}`,
+        jobId,
+      });
+
       // Extract companies from category pages
       if (url.includes('/categories/')) {
-        const extractedCompanies = this.extractCompaniesFromCategory($, url, settings);
-        
-        // For each company found, try to get additional details
-        for (const company of extractedCompanies) {
-          if (company.trustpilotUrl && company.trustpilotUrl !== url) {
-            try {
-              // Get additional details from individual business page
-              const detailedCompany = await this.getCompanyDetails(company, settings, jobId);
-              companies.push(detailedCompany);
-            } catch (error) {
-              // If details fail, use basic company info
-              companies.push(company);
-            }
-          } else {
-            companies.push(company);
-          }
-        }
+        const extractedCompanies = await this.extractCompaniesFromCategory($, url, settings, jobId);
+        companies.push(...extractedCompanies);
       }
       // Extract company details from individual business pages
       else if (url.includes('/review/')) {
@@ -324,111 +317,139 @@ export class TrustpilotScraper {
     return companies;
   }
 
-  private extractCompaniesFromCategory($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings): any[] {
+  private async extractCompaniesFromCategory($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings, jobId: string): Promise<any[]> {
     const companies: any[] = [];
 
-    // Updated selectors based on current Trustpilot structure for 2025
-    const companySelectors = [
-      // Primary selectors for business unit cards
-      '[data-testid="business-unit-card"]',
-      '[data-business-unit-json]',
-      'article[data-testid*="business"]',
-      '.business-unit-card',
-      '.styles_businessUnitCard__*',
-      '.styles_wrapper__*',
-      
-      // Fallback selectors for different page layouts
-      '[class*="businessUnit"]',
-      '[class*="business-unit"]',
-      '[class*="company-card"]',
-      '.review-card',
-      'article',
-      '[data-testid="business-unit"]',
-      '.business-unit',
-    ];
+    // First, try to find all links that point to business review pages
+    const businessLinks = $('a[href*="/review/"]');
+    
+    await this.storage.addLog({
+      level: "info",
+      message: `Found ${businessLinks.length} business review links on the page`,
+      jobId,
+    });
 
-    let foundCompanies = false;
-
-    for (const selector of companySelectors) {
-      const elements = $(selector);
-      
-      if (elements.length > 0) {
-        foundCompanies = true;
-        
-        elements.each((index, element) => {
-          if (index >= (settings.reviewLimit || 500)) return false;
-          
-          try {
-            const $el = $(element);
-            
-            // Extract from JSON data attribute if available
-            const jsonData = $el.attr('data-business-unit-json');
-            if (jsonData) {
-              try {
-                const data = JSON.parse(jsonData);
-                companies.push(this.parseCompanyFromJson(data, url));
-                return;
-              } catch {
-                // Fall through to HTML parsing
-              }
-            }
-
-            // Fallback to HTML parsing
-            const company = this.parseCompanyFromHtml($el, url);
-            if (company && company.name && company.name.trim().length > 2) {
-              companies.push(company);
-            }
-          } catch (error) {
-            // Skip individual parsing errors but continue processing
-          }
-        });
-        break;
-      }
-    }
-
-    // If no structured data found, try alternative approaches
-    if (!foundCompanies) {
-      // Try to find business links
-      const linkElements = $('a[href*="/review/"]');
-      linkElements.each((index, element) => {
-        if (index >= (settings.reviewLimit || 500)) return false;
+    if (businessLinks.length > 0) {
+      businessLinks.each((index, element) => {
+        if (index >= (settings.reviewLimit || 100)) return false;
         
         const $link = $(element);
         const href = $link.attr('href');
-        const name = $link.text().trim() || $link.find('h3, h2, .title').text().trim();
         
-        if (href && name && name.length > 2) {
-          companies.push({
-            name: name,
-            trustpilotUrl: href.startsWith('http') ? href : `https://www.trustpilot.com${href}`,
-            domain: this.extractDomainFromUrl(href),
-            type: this.getCategoryType(url),
-          });
+        if (!href) return;
+        
+        // Get business name from link text or closest heading
+        let name = $link.text().trim();
+        if (!name || name.length < 3) {
+          name = $link.find('span, div, h1, h2, h3, h4, h5').text().trim();
         }
-      });
-
-      // Try to find company names in headings
-      if (companies.length === 0) {
-        $('h1, h2, h3, h4').each((index, element) => {
-          if (index >= (settings.reviewLimit || 500)) return false;
-          
-          const $heading = $(element);
-          const text = $heading.text().trim();
-          const link = $heading.find('a').attr('href') || $heading.closest('a').attr('href');
-          
-          if (text && text.length > 5 && text.length < 100) {
-            companies.push({
-              name: text,
-              trustpilotUrl: link ? (link.startsWith('http') ? link : `https://www.trustpilot.com${link}`) : url,
-              domain: link ? this.extractDomainFromUrl(link) : '',
-              type: this.getCategoryType(url),
-            });
+        if (!name || name.length < 3) {
+          name = $link.closest('div').find('h1, h2, h3, h4, h5').first().text().trim();
+        }
+        if (!name || name.length < 3) {
+          // Extract from URL path
+          const urlParts = href.split('/review/')[1]?.split('/')[0];
+          name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+        }
+        
+        // Skip if still no valid name
+        if (!name || name.length < 3) return;
+        
+        // Get rating from nearby elements
+        let rating: number | null = null;
+        const ratingEl = $link.closest('div').find('[class*="rating"], [class*="star"], [class*="score"]').first();
+        if (ratingEl.length > 0) {
+          const ratingText = ratingEl.text().trim();
+          const ratingMatch = ratingText.match(/(\d+(?:\.\d+)?)/);
+          if (ratingMatch) {
+            const parsedRating = parseFloat(ratingMatch[1]);
+            if (parsedRating >= 0 && parsedRating <= 5) {
+              rating = parsedRating;
+            }
           }
+        }
+        
+        // Get review count from nearby elements
+        let reviewCount: number | null = null;
+        const reviewEl = $link.closest('div').find('[class*="review"], span:contains("reviews"), span:contains("recensioni")').first();
+        if (reviewEl.length > 0) {
+          const reviewText = reviewEl.text().trim();
+          const reviewMatch = reviewText.match(/([\d,]+)/);
+          if (reviewMatch) {
+            reviewCount = parseInt(reviewMatch[1].replace(/,/g, ''));
+          }
+        }
+        
+        // Get location/city from nearby elements
+        let city: string | null = null;
+        const locationEl = $link.closest('div').find('[class*="location"], [class*="city"], [class*="address"]').first();
+        if (locationEl.length > 0) {
+          city = locationEl.text().trim();
+        }
+        
+        const trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
+        
+        companies.push({
+          name: name,
+          rating: rating,
+          reviewCount: reviewCount,
+          trustpilotUrl: trustpilotUrl,
+          domain: this.extractDomainFromUrl(trustpilotUrl),
+          type: this.getCategoryType(url),
+          description: null,
+          email: null,
+          phone: null,
+          city: city,
+          address: null,
+          website: null,
         });
-      }
+      });
     }
 
-    return companies.slice(0, (settings.reviewLimit || 500)); // Increased limit to capture more companies per page
+    // If no business links found, try alternative methods
+    if (companies.length === 0) {
+      await this.storage.addLog({
+        level: "warning",
+        message: `No business links found, trying alternative extraction methods`,
+        jobId,
+      });
+
+      // Look for any structured data in script tags or data attributes
+      $('script[type="application/ld+json"], script[type="application/json"]').each((index, element) => {
+        try {
+          const scriptContent = $(element).html();
+          if (scriptContent) {
+            const data = JSON.parse(scriptContent);
+            if (data && data.name && typeof data.name === 'string') {
+              companies.push({
+                name: data.name,
+                rating: data.aggregateRating?.ratingValue || null,
+                reviewCount: data.aggregateRating?.reviewCount || null,
+                trustpilotUrl: url,
+                domain: '',
+                type: this.getCategoryType(url),
+                description: data.description || null,
+                email: null,
+                phone: null,
+                city: null,
+                address: null,
+                website: null,
+              });
+            }
+          }
+        } catch (error) {
+          // Skip invalid JSON
+        }
+      });
+    }
+
+    await this.storage.addLog({
+      level: "info",
+      message: `Extracted ${companies.length} companies from category page`,
+      jobId,
+    });
+
+    return companies.slice(0, (settings.reviewLimit || 100));
   }
 
   private extractCompanyFromBusinessPage($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings): any | null {
@@ -673,8 +694,13 @@ export class TrustpilotScraper {
       website = websiteLink.attr('href') || '';
     }
 
+    // Don't create entries for companies without valid names
+    if (!name || name.length < 3 || name === 'Unknown Company') {
+      return null;
+    }
+
     return {
-      name: name || 'Unknown Company',
+      name: name,
       rating: rating,
       reviewCount: reviewCount,
       trustpilotUrl: trustpilotUrl,
