@@ -365,21 +365,46 @@ export class TrustpilotScraper {
           if (nameEl.length > 0) {
             let rawName = nameEl.text().trim();
 
-            // Extract just the company name, removing rating, reviews, and location data
-            // Pattern: CompanyName + domain + rating + reviews + location
-            const nameMatch = rawName.match(/^([^0-9.,]+?)(?:[a-z0-9.-]+\.[a-z]{2,}|[\d.,]+|Via |Strada |,)/i);
+            // More aggressive name cleaning for concatenated text
+            // Remove common Trustpilot prefixes
+            rawName = rawName.replace(/^Più rilevante\s*/i, '');
+            rawName = rawName.replace(/^RILEVANTE\s*/i, '');
+            
+            // Extract company name before domain/website
+            let nameMatch = rawName.match(/^([^.]+?)(?:[a-z0-9-]+\.[a-z]{2,})/i);
             if (nameMatch) {
               name = nameMatch[1].trim();
             } else {
-              name = rawName.split(/[\d.,]/)[0].trim(); // Take everything before first number
+              // Extract name before rating (number with decimal)
+              nameMatch = rawName.match(/^([^0-9]+?)(?:\d+[.,]\d+)/i);
+              if (nameMatch) {
+                name = nameMatch[1].trim();
+              } else {
+                // Extract name before review count
+                nameMatch = rawName.match(/^([^0-9]+?)(?:\d+\s*recensioni)/i);
+                if (nameMatch) {
+                  name = nameMatch[1].trim();
+                } else {
+                  // Extract name before location markers
+                  nameMatch = rawName.match(/^([^,]+?)(?:,|Via |Strada |Piazza )/i);
+                  if (nameMatch) {
+                    name = nameMatch[1].trim();
+                  } else {
+                    // Last resort: take first 50 chars before any number
+                    name = rawName.split(/\d/)[0].trim().substring(0, 50);
+                  }
+                }
+              }
             }
 
-            // Clean up common prefixes and formatting issues
-            name = name.replace(/^Più rilevante\s*/i, '');
-            name = name.replace(/^RILEVANTE\s*/i, '');
-            name = name.replace(/\s+/g, ' ');
+            // Final cleanup
+            name = name.replace(/\s+/g, ' ').trim();
+            
+            // Remove trailing punctuation and common suffixes
+            name = name.replace(/[.,;:\-\s]+$/, '');
+            name = name.replace(/\s*(srl|spa|s\.r\.l\.|s\.p\.a\.)$/i, '');
 
-            if (name && name.length > 2) break;
+            if (name && name.length > 2 && name.length < 100) break;
           }
         }
 
@@ -445,11 +470,23 @@ export class TrustpilotScraper {
         // If no structured rating found, extract from concatenated text
         if (!rating) {
           const fullText = $card.text();
-          const ratingMatch = fullText.match(/(\d+[.,]\d+)(?=\s*\d+\s*recensioni)/i);
-          if (ratingMatch) {
-            const parsed = parseFloat(ratingMatch[1].replace(',', '.'));
-            if (!isNaN(parsed) && parsed >= 0 && parsed <= 5) {
-              rating = parsed;
+          // Look for rating patterns with more flexibility
+          const ratingPatterns = [
+            /(\d+[.,]\d+)(?=\s*\d+\s*recensioni)/i,
+            /(\d+[.,]\d+)(?=\s*stelle|stars)/i,
+            /rating[:\s]*(\d+[.,]\d+)/i,
+            /(\d+[.,]\d+)\s*\/\s*5/i,
+            /(\d+[.,]\d+)(?=\s*su\s*5)/i
+          ];
+          
+          for (const pattern of ratingPatterns) {
+            const ratingMatch = fullText.match(pattern);
+            if (ratingMatch) {
+              const parsed = parseFloat(ratingMatch[1].replace(',', '.'));
+              if (!isNaN(parsed) && parsed >= 0 && parsed <= 5) {
+                rating = parsed;
+                break;
+              }
             }
           }
         }
@@ -486,12 +523,25 @@ export class TrustpilotScraper {
         // If no structured review count found, extract from concatenated text
         if (!reviewCount) {
           const fullText = $card.text();
-          const reviewMatch = fullText.match(/([\d.,]+)\s*recensioni/i);
-          if (reviewMatch) {
-            const cleanNumber = reviewMatch[1].replace(/[.,]/g, '');
-            const parsed = parseInt(cleanNumber);
-            if (!isNaN(parsed) && parsed > 0 && parsed < 10000000) {
-              reviewCount = parsed;
+          // Look for review count patterns with more flexibility
+          const reviewPatterns = [
+            /([\d.,]+)\s*recensioni/i,
+            /([\d.,]+)\s*reviews?/i,
+            /([\d.,]+)\s*opinioni/i,
+            /basato\s+su\s+([\d.,]+)/i,
+            /based\s+on\s+([\d.,]+)/i,
+            /(\d+(?:[.,]\d{3})*)\s*valutazioni/i
+          ];
+          
+          for (const pattern of reviewPatterns) {
+            const reviewMatch = fullText.match(pattern);
+            if (reviewMatch) {
+              const cleanNumber = reviewMatch[1].replace(/[.,]/g, '');
+              const parsed = parseInt(cleanNumber);
+              if (!isNaN(parsed) && parsed > 0 && parsed < 10000000) {
+                reviewCount = parsed;
+                break;
+              }
             }
           }
         }
@@ -532,16 +582,49 @@ export class TrustpilotScraper {
         // If no structured location found, extract from concatenated text
         if (!address) {
           const fullText = $card.text();
-          // Look for Italian address patterns (Via/Strada followed by address)
-          const addressMatch = fullText.match(/(Via|Strada|Viale|Piazza)\s+[^,]+,\s*[^,]+,\s*[^,]+/i);
-          if (addressMatch) {
-            address = addressMatch[0].trim();
-            // Extract city (typically the second-to-last part before "Italia")
-            const addressParts = address.split(',').map(p => p.trim());
-            if (addressParts.length >= 2) {
-              city = addressParts[addressParts.length - 2];
-              if (city.toLowerCase().includes('italia')) {
-                city = addressParts[addressParts.length - 3] || null;
+          // Look for Italian address patterns with more flexibility
+          const addressPatterns = [
+            /(Via|Strada|Viale|Piazza|Corso)\s+[^,\d]+(?:\d+[^,]*)?(?:,\s*[^,]+){1,3}/i,
+            /(\d{5})\s+([A-Za-z\s]+)(?:,\s*[A-Z]{2})?(?:,\s*Italia)?/i,
+            /([A-Za-z\s]+),\s*(\d{5})\s+([A-Za-z\s]+)/i
+          ];
+          
+          for (const pattern of addressPatterns) {
+            const addressMatch = fullText.match(pattern);
+            if (addressMatch) {
+              address = addressMatch[0].trim();
+              
+              // Extract city from Italian address format
+              const addressParts = address.split(',').map(p => p.trim());
+              if (addressParts.length >= 2) {
+                // Look for postal code pattern to identify city
+                const postalCodePattern = /\d{5}/;
+                let cityIndex = -1;
+                
+                for (let i = 0; i < addressParts.length; i++) {
+                  if (postalCodePattern.test(addressParts[i])) {
+                    // City usually comes after postal code
+                    cityIndex = i + 1;
+                    break;
+                  }
+                }
+                
+                if (cityIndex > 0 && cityIndex < addressParts.length) {
+                  city = addressParts[cityIndex].replace(/[()]/g, '').trim();
+                } else {
+                  // Fallback: take the second-to-last part
+                  city = addressParts[addressParts.length - 2];
+                  if (city && city.toLowerCase().includes('italia')) {
+                    city = addressParts[addressParts.length - 3] || null;
+                  }
+                }
+                
+                // Clean up city name
+                if (city) {
+                  city = city.replace(/[()]/g, '').replace(/\d+/g, '').trim();
+                  if (city.length < 2 || city.length > 50) city = null;
+                }
+                break;
               }
             }
           }
@@ -561,22 +644,52 @@ export class TrustpilotScraper {
 
         // Extract domain from concatenated text (usually appears after company name)
         const fullText = $card.text();
-        const domainMatch = fullText.match(/([a-z0-9.-]+\.[a-z]{2,})/i);
-        if (domainMatch) {
-          domain = domainMatch[1].toLowerCase();
-        } else {
+        // Look for domain patterns with better validation
+        const domainPatterns = [
+          /([a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?)/i,
+          /www\.([a-z0-9-]+\.[a-z]{2,})/i,
+          /https?:\/\/(?:www\.)?([a-z0-9-]+\.[a-z]{2,})/i
+        ];
+        
+        for (const pattern of domainPatterns) {
+          const domainMatch = fullText.match(pattern);
+          if (domainMatch) {
+            let extractedDomain = domainMatch[1].toLowerCase();
+            // Validate domain format
+            if (extractedDomain.includes('.') && 
+                extractedDomain.length > 4 && 
+                extractedDomain.length < 100 &&
+                !/\s/.test(extractedDomain)) {
+              domain = extractedDomain.replace(/^www\./, '');
+              break;
+            }
+          }
+        }
+        
+        if (!domain) {
           domain = this.extractDomainFromUrl(trustpilotUrl);
         }
 
         // Final name cleanup and validation
         name = name.trim();
-        if (name && name.length >= 3 && !name.toLowerCase().includes('unknown')) {
-          companies.push({
+        
+        // Enhanced validation for company data
+        const isValidName = name && 
+          name.length >= 3 && 
+          name.length <= 100 &&
+          !name.toLowerCase().includes('unknown') &&
+          !name.toLowerCase().includes('più rilevante') &&
+          !name.toLowerCase().includes('rilevante') &&
+          !/^\d+$/.test(name) && // Not just numbers
+          !/^[.,;:\-\s]+$/.test(name); // Not just punctuation
+        
+        if (isValidName) {
+          const companyData = {
             name: name,
             rating: rating,
             reviewCount: reviewCount,
             trustpilotUrl: trustpilotUrl,
-            domain: domain,
+            domain: domain || null,
             type: this.getCategoryType(url),
             description: null,
             email: null,
@@ -584,6 +697,21 @@ export class TrustpilotScraper {
             city: city,
             address: address,
             website: domain ? `https://${domain}` : null,
+          };
+          
+          // Log company data for debugging
+          await this.storage.addLog({
+            level: "info",
+            message: `Extracted company: ${name} | Rating: ${rating} | Reviews: ${reviewCount} | Domain: ${domain} | City: ${city}`,
+            jobId,
+          });
+          
+          companies.push(companyData);
+        } else {
+          await this.storage.addLog({
+            level: "warning",
+            message: `Skipped invalid company name: "${name}"`,
+            jobId,
           });
         }
       });
