@@ -1,5 +1,6 @@
 import { IStorage } from "../storage";
 import { Company } from "@shared/schema";
+import * as XLSX from 'xlsx';
 
 export class ExportService {
   private storage: IStorage;
@@ -95,11 +96,36 @@ export class ExportService {
   }
 
   private exportToExcel(companies: Company[]) {
-    // For a real implementation, you would use a library like 'exceljs' or 'xlsx'
-    // Since we can't install packages, we'll fall back to CSV format
-    const csvResult = this.exportToCsv(companies);
+    const worksheetData = [
+      [
+        "Company Name", "Company Type", "Domain", "City", "Phone", "Email",
+        "Rating", "Review Count", "Trustpilot URL", "Description", "Address", "Website", "Status"
+      ],
+      ...companies.map(company => [
+        company.name || "",
+        company.type || "",
+        company.domain || "",
+        company.city || "",
+        company.phone || "",
+        company.email || "",
+        company.rating || "",
+        company.reviewCount || "",
+        company.trustpilotUrl || "",
+        company.description || "",
+        company.address || "",
+        company.website || "",
+        company.status || "",
+      ])
+    ];
+
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Companies");
+
+    const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
     return {
-      ...csvResult,
+      data: excelBuffer,
       filename: "trustpilot-companies.xlsx",
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     };

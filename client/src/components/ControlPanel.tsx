@@ -33,12 +33,12 @@ export default function ControlPanel({
     includeImages: true,
   });
 
-  const { data: urls = [] } = useQuery({
+  const { data: urls = [] } = useQuery<any[]>({
     queryKey: ["/api/scraping/urls"],
   });
 
   const handleStartScraping = () => {
-    if (urls.length === 0) {
+    if (!urls || urls.length === 0) {
       return;
     }
     onStartScraping(urls.map((url: any) => url.url), settings);
@@ -64,7 +64,7 @@ export default function ControlPanel({
             <div className="flex items-center gap-4">
               <Button
                 onClick={handleStartScraping}
-                disabled={isStarting || isRunning || urls.length === 0}
+                disabled={isStarting || isRunning || !urls || urls.length === 0}
                 className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 px-8"
               >
                 {isStarting ? (

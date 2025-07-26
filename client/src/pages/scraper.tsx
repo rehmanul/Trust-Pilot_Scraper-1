@@ -16,23 +16,23 @@ export default function ScraperPage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   // Queries
-  const { data: currentJob } = useQuery({
+  const { data: currentJob } = useQuery<any>({
     queryKey: ["/api/scraping/current-job"],
     refetchInterval: selectedJobId ? 2000 : false,
   });
 
-  const { data: companies = [] } = useQuery({
+  const { data: companies = [] } = useQuery<any[]>({
     queryKey: ["/api/companies"],
     refetchInterval: selectedJobId ? 5000 : false,
   });
 
-  const { data: logs = [] } = useQuery({
+  const { data: logs = [] } = useQuery<any[]>({
     queryKey: ["/api/logs", selectedJobId],
     refetchInterval: selectedJobId ? 2000 : false,
     enabled: !!selectedJobId,
   });
 
-  const { data: urls = [] } = useQuery({
+  const { data: urls = [] } = useQuery<any[]>({
     queryKey: ["/api/scraping/urls"],
   });
 
@@ -96,7 +96,7 @@ export default function ScraperPage() {
   });
 
   useEffect(() => {
-    if (currentJob?.id && currentJob.status !== "completed" && currentJob.status !== "error") {
+    if (currentJob && currentJob.id && currentJob.status !== "completed" && currentJob.status !== "error") {
       setSelectedJobId(currentJob.id);
     }
   }, [currentJob]);
@@ -108,13 +108,13 @@ export default function ScraperPage() {
         
         <URLManagement />
         
-        <AdvancedSettings />
+        {/* AdvancedSettings moved to ControlPanel */}
         
         <ControlPanel
           onStartScraping={(urls, settings) => startScrapingMutation.mutate({ urls, settings })}
           onStopScraping={() => stopScrapingMutation.mutate()}
           onExportData={(format) => exportDataMutation.mutate(format)}
-          isRunning={!!selectedJobId && currentJob?.status === "running"}
+          isRunning={!!selectedJobId && currentJob && currentJob.status === "running"}
           isStarting={startScrapingMutation.isPending}
           isExporting={exportDataMutation.isPending}
         />

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertScrapingUrlSchema, insertScrapingJobSchema } from "@shared/schema";
+import { insertScrapingUrlSchema, insertScrapingJobSchema, insertLogSchema } from "@shared/schema";
 import { TrustpilotScraper } from "./services/scraper";
 import { ExportService } from "./services/export";
 

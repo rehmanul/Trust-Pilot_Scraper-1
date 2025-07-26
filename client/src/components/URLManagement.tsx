@@ -28,7 +28,7 @@ export default function URLManagement() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: urls = [] } = useQuery({
+  const { data: urls = [] } = useQuery<any[]>({
     queryKey: ["/api/scraping/urls"],
   });
 
@@ -136,7 +136,7 @@ export default function URLManagement() {
           </div>
 
           {/* URL List */}
-          {urls.length > 0 && (
+          {urls && urls.length > 0 && (
             <div className="bg-gray-50 rounded-xl p-4 max-h-64 overflow-y-auto space-y-2">
               {urls.map((url: any) => (
                 <div key={url.id} className="flex items-center justify-between bg-white p-3 rounded-lg border-l-4 border-blue-500">

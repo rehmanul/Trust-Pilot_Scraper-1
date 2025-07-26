@@ -42,7 +42,7 @@ export class MemStorage implements IStorage {
       ...url, 
       id, 
       createdAt: new Date(),
-      status: "pending"
+      status: url.status || "pending"
     };
     this.scrapingUrls.set(id, scrapingUrl);
     return scrapingUrl;
@@ -67,7 +67,7 @@ export class MemStorage implements IStorage {
       ...company, 
       id, 
       createdAt: new Date(),
-      status: "pending"
+      status: company.status || "pending"
     };
     this.companies.set(id, newCompany);
     return newCompany;
@@ -98,7 +98,8 @@ export class MemStorage implements IStorage {
     const scrapingJob: ScrapingJob = { 
       ...job, 
       id, 
-      createdAt: new Date()
+      createdAt: new Date(),
+      status: job.status || "pending"
     };
     this.scrapingJobs.set(id, scrapingJob);
     return scrapingJob;
@@ -128,7 +129,8 @@ export class MemStorage implements IStorage {
     const newLog: Log = { 
       ...log, 
       id, 
-      timestamp: new Date()
+      timestamp: new Date(),
+      jobId: log.jobId || null
     };
     this.logs.set(id, newLog);
     return newLog;
