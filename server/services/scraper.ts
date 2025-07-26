@@ -354,6 +354,12 @@ export class TrustpilotScraper {
           const nameEl = $card.find(selector).first();
           if (nameEl.length > 0) {
             name = nameEl.text().trim();
+            
+            // Clean up common prefixes and formatting issues
+            name = name.replace(/^Più rilevante\s*/i, '');
+            name = name.replace(/^RILEVANTE\s*/i, '');
+            name = name.replace(/\s+/g, ' ');
+            
             if (name && name.length > 2) break;
           }
         }
@@ -370,6 +376,11 @@ export class TrustpilotScraper {
                 name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
               }
             }
+            
+            // Clean up extracted name from link text too
+            name = name.replace(/^Più rilevante\s*/i, '');
+            name = name.replace(/^RILEVANTE\s*/i, '');
+            name = name.replace(/\s+/g, ' ');
           }
         }
         
@@ -412,24 +423,28 @@ export class TrustpilotScraper {
           }
         }
         
-        // Extract review count
+        // Extract review count with better pattern matching
         let reviewCount: number | null = null;
         const reviewSelectors = [
           'p[class*="styles_reviewCount"]',
           'span:contains("recensioni")',
           'span:contains("reviews")',
-          'a[href*="reviews"]'
+          'a[href*="reviews"]',
+          'p:contains("recensioni")',
+          'div:contains("recensioni")'
         ];
         
         for (const selector of reviewSelectors) {
           const reviewEl = $card.find(selector).first();
           if (reviewEl.length > 0) {
             const reviewText = reviewEl.text().trim();
-            const reviewMatch = reviewText.match(/([\d.,]+)/);
+            // Look for numbers followed by "recensioni" or "reviews"
+            const reviewMatch = reviewText.match(/([\d.,]+)\s*(?:recensioni|reviews)/i) || 
+                               reviewText.match(/([\d.,]+)/);
             if (reviewMatch) {
               const cleanNumber = reviewMatch[1].replace(/[.,]/g, '');
               const parsed = parseInt(cleanNumber);
-              if (!isNaN(parsed) && parsed > 0) {
+              if (!isNaN(parsed) && parsed > 0 && parsed < 10000000) { // Reasonable upper limit
                 reviewCount = parsed;
                 break;
               }
@@ -481,20 +496,24 @@ export class TrustpilotScraper {
           }
         }
         
-        companies.push({
-          name: name,
-          rating: rating,
-          reviewCount: reviewCount,
-          trustpilotUrl: trustpilotUrl,
-          domain: this.extractDomainFromUrl(trustpilotUrl),
-          type: this.getCategoryType(url),
-          description: null,
-          email: null,
-          phone: null,
-          city: city,
-          address: address,
-          website: null,
-        });
+        // Final name cleanup and validation
+        name = name.trim();
+        if (name && name.length >= 3 && !name.toLowerCase().includes('unknown')) {
+          companies.push({
+            name: name,
+            rating: rating,
+            reviewCount: reviewCount,
+            trustpilotUrl: trustpilotUrl,
+            domain: this.extractDomainFromUrl(trustpilotUrl),
+            type: this.getCategoryType(url),
+            description: null,
+            email: null,
+            phone: null,
+            city: city,
+            address: address,
+            website: null,
+          });
+        }
       });
     }
 
@@ -521,7 +540,10 @@ export class TrustpilotScraper {
           name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
         }
         
-        if (name && name.length >= 3) {
+        // Clean up name before adding
+        name = name.replace(/^Più rilevante\s*/i, '').replace(/^RILEVANTE\s*/i, '').trim();
+        
+        if (name && name.length >= 3 && !name.toLowerCase().includes('unknown')) {
           const trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
           
           companies.push({
@@ -548,7 +570,12 @@ export class TrustpilotScraper {
       jobId,
     });
 
-    return companies.slice(0, (settings.reviewLimit || 100));
+    // Remove duplicates based on name and return results
+    const uniqueCompanies = companies.filter((company, index, self) => 
+      index === self.findIndex(c => c.name.toLowerCase() === company.name.toLowerCase())
+    );
+    
+    return uniqueCompanies.slice(0, (settings.reviewLimit || 100));
   }
 
   private extractCompanyFromBusinessPage($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings): any | null {
