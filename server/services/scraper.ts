@@ -320,74 +320,166 @@ export class TrustpilotScraper {
   private async extractCompaniesFromCategory($: cheerio.CheerioAPI, url: string, settings: ScrapingSettings, jobId: string): Promise<any[]> {
     const companies: any[] = [];
 
-    // First, try to find all links that point to business review pages
-    const businessLinks = $('a[href*="/review/"]');
+    // Based on the browser inspection, use the exact Trustpilot structure
+    // Look for business unit cards in the main container
+    const businessCards = $('div[class*="styles_businessUnitCard"], div[data-business-unit-json], article[data-testid*="business"]');
     
     await this.storage.addLog({
       level: "info",
-      message: `Found ${businessLinks.length} business review links on the page`,
+      message: `Found ${businessCards.length} business cards using current DOM structure`,
       jobId,
     });
 
-    if (businessLinks.length > 0) {
-      businessLinks.each((index, element) => {
+    if (businessCards.length > 0) {
+      businessCards.each((index, element) => {
         if (index >= (settings.reviewLimit || 100)) return false;
         
-        const $link = $(element);
-        const href = $link.attr('href');
+        const $card = $(element);
         
-        if (!href) return;
+        // Extract business name - look for the company title
+        let name = '';
         
-        // Get business name from link text or closest heading
-        let name = $link.text().trim();
-        if (!name || name.length < 3) {
-          name = $link.find('span, div, h1, h2, h3, h4, h5').text().trim();
+        // Try multiple selectors for business name based on DOM inspection
+        const nameSelectors = [
+          'p[class*="styles_businessUnitTitle"]',
+          'div[class*="business-unit-title"]',
+          'h3',
+          'h2',
+          'a[href*="/review/"]',
+          'p:first-child',
+          '[data-testid*="title"]'
+        ];
+        
+        for (const selector of nameSelectors) {
+          const nameEl = $card.find(selector).first();
+          if (nameEl.length > 0) {
+            name = nameEl.text().trim();
+            if (name && name.length > 2) break;
+          }
         }
-        if (!name || name.length < 3) {
-          name = $link.closest('div').find('h1, h2, h3, h4, h5').first().text().trim();
-        }
-        if (!name || name.length < 3) {
-          // Extract from URL path
-          const urlParts = href.split('/review/')[1]?.split('/')[0];
-          name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
-        }
         
-        // Skip if still no valid name
-        if (!name || name.length < 3) return;
-        
-        // Get rating from nearby elements
-        let rating: number | null = null;
-        const ratingEl = $link.closest('div').find('[class*="rating"], [class*="star"], [class*="score"]').first();
-        if (ratingEl.length > 0) {
-          const ratingText = ratingEl.text().trim();
-          const ratingMatch = ratingText.match(/(\d+(?:\.\d+)?)/);
-          if (ratingMatch) {
-            const parsedRating = parseFloat(ratingMatch[1]);
-            if (parsedRating >= 0 && parsedRating <= 5) {
-              rating = parsedRating;
+        // If still no name, try getting it from the link
+        if (!name || name.length < 3) {
+          const link = $card.find('a[href*="/review/"]').first();
+          if (link.length > 0) {
+            name = link.text().trim();
+            if (!name || name.length < 3) {
+              const href = link.attr('href');
+              if (href) {
+                const urlParts = href.split('/review/')[1]?.split('/')[0];
+                name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+              }
             }
           }
         }
         
-        // Get review count from nearby elements
-        let reviewCount: number | null = null;
-        const reviewEl = $link.closest('div').find('[class*="review"], span:contains("reviews"), span:contains("recensioni")').first();
-        if (reviewEl.length > 0) {
-          const reviewText = reviewEl.text().trim();
-          const reviewMatch = reviewText.match(/([\d,]+)/);
-          if (reviewMatch) {
-            reviewCount = parseInt(reviewMatch[1].replace(/,/g, ''));
+        // Skip if no valid name found
+        if (!name || name.length < 3) return;
+        
+        // Extract rating - look for star ratings or numeric scores
+        let rating: number | null = null;
+        const ratingSelectors = [
+          'section[class*="styles_reviewStars"]',
+          'div[class*="rating"]',
+          'span[class*="star"]',
+          '[data-rating]',
+          'img[alt*="star"]'
+        ];
+        
+        for (const selector of ratingSelectors) {
+          const ratingEl = $card.find(selector).first();
+          if (ratingEl.length > 0) {
+            // Try to extract from data attribute
+            const dataRating = ratingEl.attr('data-rating');
+            if (dataRating) {
+              const parsed = parseFloat(dataRating);
+              if (!isNaN(parsed) && parsed >= 0 && parsed <= 5) {
+                rating = parsed;
+                break;
+              }
+            }
+            
+            // Try to extract from text content
+            const ratingText = ratingEl.text().trim();
+            const ratingMatch = ratingText.match(/(\d+(?:[.,]\d+)?)/);
+            if (ratingMatch) {
+              const parsed = parseFloat(ratingMatch[1].replace(',', '.'));
+              if (!isNaN(parsed) && parsed >= 0 && parsed <= 5) {
+                rating = parsed;
+                break;
+              }
+            }
           }
         }
         
-        // Get location/city from nearby elements
-        let city: string | null = null;
-        const locationEl = $link.closest('div').find('[class*="location"], [class*="city"], [class*="address"]').first();
-        if (locationEl.length > 0) {
-          city = locationEl.text().trim();
+        // Extract review count
+        let reviewCount: number | null = null;
+        const reviewSelectors = [
+          'p[class*="styles_reviewCount"]',
+          'span:contains("recensioni")',
+          'span:contains("reviews")',
+          'a[href*="reviews"]'
+        ];
+        
+        for (const selector of reviewSelectors) {
+          const reviewEl = $card.find(selector).first();
+          if (reviewEl.length > 0) {
+            const reviewText = reviewEl.text().trim();
+            const reviewMatch = reviewText.match(/([\d.,]+)/);
+            if (reviewMatch) {
+              const cleanNumber = reviewMatch[1].replace(/[.,]/g, '');
+              const parsed = parseInt(cleanNumber);
+              if (!isNaN(parsed) && parsed > 0) {
+                reviewCount = parsed;
+                break;
+              }
+            }
+          }
         }
         
-        const trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
+        // Extract location/address
+        let city: string | null = null;
+        let address: string | null = null;
+        
+        const locationSelectors = [
+          'p[class*="styles_location"]',
+          'div[class*="address"]',
+          'span[class*="city"]',
+          'p:contains("Via ")',
+          'p:contains("Strada ")'
+        ];
+        
+        for (const selector of locationSelectors) {
+          const locationEl = $card.find(selector).first();
+          if (locationEl.length > 0) {
+            const locationText = locationEl.text().trim();
+            if (locationText && locationText.length > 3) {
+              address = locationText;
+              // Extract city from address (typically after comma)
+              const cityMatch = locationText.match(/,\s*([^,]+)(?:,|$)/);
+              if (cityMatch) {
+                city = cityMatch[1].trim();
+              } else {
+                // If no comma, take the last part
+                const parts = locationText.split(/\s+/);
+                if (parts.length > 1) {
+                  city = parts[parts.length - 1];
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // Get Trustpilot URL
+        let trustpilotUrl = url;
+        const linkEl = $card.find('a[href*="/review/"]').first();
+        if (linkEl.length > 0) {
+          const href = linkEl.attr('href');
+          if (href) {
+            trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
+          }
+        }
         
         companies.push({
           name: name,
@@ -400,52 +492,59 @@ export class TrustpilotScraper {
           email: null,
           phone: null,
           city: city,
-          address: null,
+          address: address,
           website: null,
         });
       });
     }
 
-    // If no business links found, try alternative methods
+    // Fallback: if no structured cards found, look for any business links
     if (companies.length === 0) {
       await this.storage.addLog({
         level: "warning",
-        message: `No business links found, trying alternative extraction methods`,
+        message: `No business cards found, trying to extract from business links`,
         jobId,
       });
 
-      // Look for any structured data in script tags or data attributes
-      $('script[type="application/ld+json"], script[type="application/json"]').each((index, element) => {
-        try {
-          const scriptContent = $(element).html();
-          if (scriptContent) {
-            const data = JSON.parse(scriptContent);
-            if (data && data.name && typeof data.name === 'string') {
-              companies.push({
-                name: data.name,
-                rating: data.aggregateRating?.ratingValue || null,
-                reviewCount: data.aggregateRating?.reviewCount || null,
-                trustpilotUrl: url,
-                domain: '',
-                type: this.getCategoryType(url),
-                description: data.description || null,
-                email: null,
-                phone: null,
-                city: null,
-                address: null,
-                website: null,
-              });
-            }
-          }
-        } catch (error) {
-          // Skip invalid JSON
+      const businessLinks = $('a[href*="/review/"]');
+      businessLinks.each((index, element) => {
+        if (index >= (settings.reviewLimit || 100)) return false;
+        
+        const $link = $(element);
+        const href = $link.attr('href');
+        
+        if (!href) return;
+        
+        let name = $link.text().trim();
+        if (!name || name.length < 3) {
+          const urlParts = href.split('/review/')[1]?.split('/')[0];
+          name = urlParts ? urlParts.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '';
+        }
+        
+        if (name && name.length >= 3) {
+          const trustpilotUrl = href.startsWith('http') ? href : `https://www.trustpilot.com${href}`;
+          
+          companies.push({
+            name: name,
+            rating: null,
+            reviewCount: null,
+            trustpilotUrl: trustpilotUrl,
+            domain: this.extractDomainFromUrl(trustpilotUrl),
+            type: this.getCategoryType(url),
+            description: null,
+            email: null,
+            phone: null,
+            city: null,
+            address: null,
+            website: null,
+          });
         }
       });
     }
 
     await this.storage.addLog({
       level: "info",
-      message: `Extracted ${companies.length} companies from category page`,
+      message: `Extracted ${companies.length} companies using current DOM structure`,
       jobId,
     });
 

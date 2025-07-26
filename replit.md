@@ -18,6 +18,9 @@ User requirement: NO mock/demo/fallback/fake data - only real scraping implement
 ✓ Added real Excel export functionality using XLSX library
 ✓ Implemented comprehensive error handling and retry mechanisms
 ✓ Fixed all TypeScript compilation errors and type safety issues
+✓ Updated scraper with exact DOM selectors based on current Trustpilot HTML structure
+✓ Fixed "Unknown Company" extraction issue by targeting precise business card elements
+✓ Enhanced data extraction to capture company names, ratings, review counts, and locations accurately
 
 ## System Architecture
 
